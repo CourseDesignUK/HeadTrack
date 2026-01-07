@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>M3 MacBook Air - Holographic Window (High Visibility)</title>
+    <title>M3 MacBook Air - Holographic Window (Ultra Bright + Reflections)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; color: #00ffcc; }
         canvas { display: block; }
@@ -17,13 +17,13 @@
 
     <div id="loading">
         <div class="spinner"></div>
-        <b>CALIBRATING FOR M3...</b>
+        <b>INITIALIZING M3 HOLOGRAPHIC CORE...</b>
     </div>
 
     <div id="ui">
         <b id="status">WINDOW ACTIVE</b>
-        <div class="data" id="debug">Tracking eye position...</div>
-        <div style="margin-top:10px; font-size: 10px; color: #888;">Calibrated: 15" MBA (33.3cm)</div>
+        <div class="data" id="debug">Tracking...</div>
+        <div style="margin-top:10px; font-size: 10px; color: #888;">15" MacBook Air Calibration</div>
     </div>
 
     <video id="webcam" autoplay playsinline style="display:none;"></video>
@@ -45,45 +45,41 @@
 
         // --- CONFIG ---
         const SCREEN_W = 33.3; 
-        let rawPos = { x: 0, y: 0, z: 50 }; 
-        let smoothPos = { x: 0, y: 0, z: 50 };
-        const LERP_FACTOR = 0.15;
+        let rawPos = { x: 0, y: 0, z: 60 }; 
+        let smoothPos = { x: 0, y: 0, z: 60 };
+        const LERP_FACTOR = 0.12;
 
         // --- SCENE SETUP ---
         const scene = new THREE.Scene();
-        scene.fog = new THREE.Fog(0x000000, 10, 300);
+        scene.background = new THREE.Color(0x020202);
         
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
         renderer.setPixelRatio(window.devicePixelRatio);
         renderer.setSize(window.innerWidth, window.innerHeight);
+        
+        // --- HDR LIGHTING SETTINGS ---
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 2.8; // High exposure boost
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
         document.body.appendChild(renderer.domElement);
 
         const camera = new THREE.PerspectiveCamera();
 
-        // --- LIGHTING (Enhanced Studio Setup) ---
-        const ambientLight = new THREE.AmbientLight(0xffffff, 1.5); // High base light
-        scene.add(ambientLight);
+        // --- LIGHTS ---
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 5.0); // Extreme sky/ground light
+        scene.add(hemiLight);
 
-        const keyLight = new THREE.DirectionalLight(0xffffff, 3.0);
-        keyLight.position.set(20, 30, 40);
-        scene.add(keyLight);
+        const pointLight = new THREE.PointLight(0xffffff, 500); 
+        pointLight.position.set(0, 10, 20);
+        scene.add(pointLight);
 
-        const fillLight = new THREE.PointLight(0x00ffcc, 2.0);
-        fillLight.position.set(-25, 0, 20);
-        scene.add(fillLight);
-
-        // --- WORLD OBJECTS ---
-        const roomGroup = new THREE.Group();
-        const grid = new THREE.GridHelper(200, 40, 0x00ffcc, 0x222222);
+        // --- GRID WORLD ---
+        const grid = new THREE.GridHelper(300, 60, 0x00ffcc, 0x111111);
         grid.rotation.x = Math.PI / 2;
         grid.position.z = -50;
-        roomGroup.add(grid);
+        scene.add(grid);
 
-        const ceilingGrid = grid.clone(); ceilingGrid.position.y = 50; roomGroup.add(ceilingGrid);
-        const floorGrid = grid.clone(); floorGrid.position.y = -50; roomGroup.add(floorGrid);
-        scene.add(roomGroup);
-
-        // --- AI & MODEL ---
+        // --- AI & MODEL LOADING ---
         const video = document.getElementById("webcam");
         let landmarker;
 
@@ -98,38 +94,48 @@
                     runningMode: "VIDEO"
                 });
 
+                // --- GENERATE REFLECTION MAP ---
+                const pmremGenerator = new THREE.PMREMGenerator(renderer);
+                pmremGenerator.compileEquirectangularShader();
+                const envRT = pmremGenerator.fromScene(scene); // Model will reflect the grid and lights
+
                 const loader = new GLTFLoader();
                 loader.load('./model.glb', (gltf) => {
                     const model = gltf.scene;
                     
-                    // BRIGHTNESS FIX: Force materials to react to light
+                    // ULTRA-BRIGHT MATERIAL OVERRIDE
                     model.traverse((child) => {
                         if (child.isMesh) {
-                            child.material.needsUpdate = true;
-                            child.material.emissive = new THREE.Color(0x111111); // Subtle self-illumination
+                            child.material = new THREE.MeshStandardMaterial({
+                                color: 0xffffff,
+                                metalness: 0.9,      // High reflectivity
+                                roughness: 0.1,      // Shiny surface
+                                envMap: envRT.texture,
+                                envMapIntensity: 2.5, // Boost reflections
+                                emissive: 0xffffff,
+                                emissiveIntensity: 0.15 // Faint inner glow so it's never dark
+                            });
                         }
                     });
 
                     const box = new THREE.Box3().setFromObject(model);
                     const size = box.getSize(new THREE.Vector3());
-                    const scale = 22 / Math.max(size.x, size.y, size.z);
+                    const scale = 24 / Math.max(size.x, size.y, size.z);
                     model.scale.set(scale, scale, scale);
-                    model.position.set(0, 0, -30);
+                    model.position.set(0, 0, -25);
                     scene.add(model);
                     
                     document.getElementById('loading').style.display = 'none';
                     animate(model);
                 }, undefined, (err) => {
-                    console.error("Model Error:", err);
-                    document.getElementById('loading').innerHTML = "<b>ERROR: model.glb not found</b><br>Check GitHub file path.";
+                    document.getElementById('loading').innerHTML = "ERROR: model.glb not found in root";
                 });
 
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
                 video.srcObject = document.getElementById('v-prev').srcObject = stream;
                 video.onloadeddata = () => loop();
             } catch (e) {
-                console.error("AI Setup Error:", e);
-                document.getElementById('loading').innerText = "AI SETUP FAILED: Check Camera Permissions";
+                document.getElementById('loading').innerText = "AI/CAMERA ERROR";
             }
         }
 
@@ -148,9 +154,9 @@
                         landmarks[33].x - landmarks[263].x,
                         landmarks[33].y - landmarks[263].y
                     );
-                    rawPos.z = 32 / (eyeDist + 0.01); 
+                    rawPos.z = 35 / (eyeDist + 0.01); 
 
-                    document.getElementById('debug').innerText = `X: ${rawPos.x.toFixed(1)} Y: ${rawPos.y.toFixed(1)} Z: ${rawPos.z.toFixed(1)}`;
+                    document.getElementById('debug').innerText = `Z-Dist: ${rawPos.z.toFixed(1)}cm`;
                 }
             }
             requestAnimationFrame(loop);
@@ -164,10 +170,9 @@
             const aspect = window.innerHeight / window.innerWidth;
             const screenH = SCREEN_W * aspect;
 
-            // Off-axis projection (The "Window" effect)
+            // OFF-AXIS HOLOGRAPHIC PROJECTION
             const n = 0.1; 
-            const f = 1000;
-            
+            const f = 2000;
             const l = ((-SCREEN_W / 2) - smoothPos.x) * n / smoothPos.z;
             const r = ((SCREEN_W / 2) - smoothPos.x) * n / smoothPos.z;
             const b = ((-screenH / 2) - smoothPos.y) * n / smoothPos.z;
@@ -178,9 +183,8 @@
             camera.quaternion.set(0, 0, 0, 1); 
 
             if (model) {
-                model.rotation.y += 0.008;
-                // Keep model light-responsive
-                model.rotation.x = Math.sin(Date.now() * 0.001) * 0.1;
+                model.rotation.y += 0.01;
+                model.rotation.z += 0.002;
             }
 
             renderer.render(scene, camera);
