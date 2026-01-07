@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Model Viewer – Hand Scale (No Parallax)</title>
+<title>Model Viewer – Grab, Scale & Rotate</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
@@ -15,7 +15,21 @@ body {
 }
 canvas { display:block; }
 
-/* UI */
+/* Instruction box (top right) */
+#instructions {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: rgba(0,0,0,0.85);
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid #333;
+  font-size: 12px;
+  line-height: 1.5;
+  z-index: 10;
+}
+
+/* Status box */
 #ui {
   position: fixed;
   top: 20px;
@@ -38,7 +52,6 @@ canvas { display:block; }
   justify-content: center;
   z-index: 100;
 }
-
 .spinner {
   width: 40px;
   height: 40px;
@@ -47,7 +60,6 @@ canvas { display:block; }
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
-
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Webcam preview */
@@ -83,9 +95,15 @@ canvas { display:block; }
 <div id="loading"><div class="spinner"></div></div>
 
 <div id="ui">
-  <b>NORMAL MODEL VIEW</b><br>
-  Hand scale enabled<br>
+  <b>Status</b><br>
   <span id="debug">Waiting for hands…</span>
+</div>
+
+<div id="instructions">
+  <b>Controls</b><br>
+  🤏 Pinch + move = grab<br>
+  🤏🤏 Two-hand pinch = rotate<br>
+  ✋ Spread hands = scale
 </div>
 
 <video id="webcam" autoplay playsinline style="display:none"></video>
@@ -119,25 +137,17 @@ renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-/* Fixed, normal camera */
-const camera = new THREE.PerspectiveCamera(
-  45,
-  innerWidth / innerHeight,
-  0.1,
-  1000
-);
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 1000);
 camera.position.set(0, 0, 80);
 
-/* Lighting */
 scene.add(new THREE.DirectionalLight(0xffffff, 2).position.set(10,20,20));
 scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 
-/* Optional ground grid */
 const grid = new THREE.GridHelper(200, 20, 0x00ffcc, 0x222222);
 grid.position.y = -25;
 scene.add(grid);
 
-/* ───────── LOAD MODEL ───────── */
+/* ───────── MODEL ───────── */
 
 let model;
 let baseScale = 1;
@@ -166,6 +176,9 @@ const dotR = document.getElementById("dotR");
 
 let handLandmarker;
 let baselineDist = null;
+let grabbing = false;
+let lastMid = null;
+let lastAngle = null;
 
 async function initHands() {
   const vision = await FilesetResolver.forVisionTasks(
@@ -190,6 +203,11 @@ async function initHands() {
   };
 }
 
+function pinch(hand) {
+  const i = hand[8], t = hand[4];
+  return Math.hypot(i.x - t.x, i.y - t.y) < 0.04;
+}
+
 function updateDot(dot, lm) {
   dot.style.left = `${lm.x * innerWidth}px`;
   dot.style.top  = `${lm.y * innerHeight}px`;
@@ -199,39 +217,59 @@ function updateDot(dot, lm) {
 function trackHands() {
   const res = handLandmarker.detectForVideo(video, performance.now());
 
-  if (res.landmarks && res.landmarks.length === 2) {
-    const a = res.landmarks[0][8]; // index tip
-    const b = res.landmarks[1][8];
+  if (res.landmarks?.length) {
+    const hands = res.landmarks;
+    const pinches = hands.map(pinch);
 
-    updateDot(dotL, a);
-    updateDot(dotR, b);
+    if (hands.length === 2) {
+      const a = hands[0][8];
+      const b = hands[1][8];
 
-    const d = Math.hypot(a.x - b.x, a.y - b.y);
-    if (!baselineDist) baselineDist = d;
+      updateDot(dotL, a);
+      updateDot(dotR, b);
 
-    const factor = THREE.MathUtils.clamp(d / baselineDist, 0.4, 3.0);
-    targetScale = baseScale * factor;
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (!baselineDist) baselineDist = d;
+      targetScale = baseScale * THREE.MathUtils.clamp(d / baselineDist, 0.4, 3);
 
-    document.getElementById("debug").innerText =
-      `Scale ${factor.toFixed(2)}×`;
-  } else {
-    dotL.style.display = dotR.style.display = "none";
-    baselineDist = null;
-    document.getElementById("debug").innerText = "Show two hands";
+      if (pinches[0] && pinches[1]) {
+        const mid = { x:(a.x+b.x)/2, y:(a.y+b.y)/2 };
+        const angle = Math.atan2(b.y-a.y, b.x-a.x);
+
+        if (lastAngle !== null) {
+          model.rotation.y += angle - lastAngle;
+        }
+        lastAngle = angle;
+        document.getElementById("debug").innerText = "Rotating";
+      } else {
+        lastAngle = null;
+      }
+    } else if (hands.length === 1 && pinches[0]) {
+      const p = hands[0][8];
+      updateDot(dotL, p);
+      dotR.style.display = "none";
+
+      if (!lastMid) lastMid = p;
+      model.position.x += (p.x - lastMid.x) * 50;
+      model.position.y -= (p.y - lastMid.y) * 50;
+      lastMid = p;
+
+      document.getElementById("debug").innerText = "Grabbing";
+    } else {
+      dotL.style.display = dotR.style.display = "none";
+      baselineDist = lastMid = lastAngle = null;
+      document.getElementById("debug").innerText = "Show hands";
+    }
   }
 
   requestAnimationFrame(trackHands);
 }
 
-/* ───────── ANIMATION LOOP ───────── */
+/* ───────── RENDER LOOP ───────── */
 
 function animate() {
   smoothScale += (targetScale - smoothScale) * 0.15;
-
-  if (model) {
-    model.scale.setScalar(smoothScale);
-    model.rotation.y += 0.003; // gentle auto-rotate
-  }
+  if (model) model.scale.setScalar(smoothScale);
 
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
