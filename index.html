@@ -1,31 +1,165 @@
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7";
+<!DOCTYPE html>
+<html>
+<head>
+    <title>M3 MacBook Air - Final Holographic Window</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; color: #00ffcc; }
+        canvas { display: block; }
+        #ui { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.85); padding: 15px; border-radius: 12px; border: 1px solid #333; z-index: 10; width: 220px; backdrop-filter: blur(5px); }
+        #v-prev { position: absolute; bottom: 20px; right: 20px; width: 140px; border-radius: 8px; border: 1px solid #00ffcc; transform: scaleX(-1); opacity: 0.6; }
+        .data { font-family: monospace; color: white; font-size: 11px; margin-top: 5px; opacity: 0.7; }
+        #loading { position: absolute; inset: 0; background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; }
+        .spinner { width: 40px; height: 40px; border: 4px solid #333; border-top: 4px solid #00ffcc; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 10px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
 
-// ... [previous scene setup code] ...
+    <div id="loading">
+        <div class="spinner"></div>
+        <b>CALIBRATING FOR M3...</b>
+    </div>
 
-async function setupAI() {
-    try {
-        const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7/wasm");
-        landmarker = await FaceLandmarker.createFromOptions(vision, {
-            baseOptions: { 
-                modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-                delegate: "GPU" 
-            },
-            runningMode: "VIDEO"
-        });
+    <div id="ui">
+        <b id="status">WINDOW ACTIVE</b>
+        <div class="data" id="debug">Tracking eye position...</div>
+        <div style="margin-top:10px; font-size: 10px; color: #888;">Calibrated: 15" MBA (33.3cm)</div>
+    </div>
+
+    <video id="webcam" autoplay playsinline style="display:none;"></video>
+    <video id="v-prev" autoplay playsinline></video>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7";
+
+        // CONFIG
+        const SCREEN_W = 33.3; 
+        let rawPos = { x: 0, y: 0, z: 50 };
+        let smoothPos = { x: 0, y: 0, z: 50 };
+        const LERP_FACTOR = 0.15;
+
+        // SCENE SETUP
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.Fog(0x000000, 10, 150);
         
-        // Model loading with relative path fix
-        const loader = new GLTFLoader();
-        loader.load('./model.glb', (gltf) => {
-            scene.add(gltf.scene);
-            document.getElementById('loading').style.display = 'none';
-        }, undefined, (e) => console.error("GLB Load Error:", e));
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
 
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
-        video.srcObject = document.getElementById('v-prev').srcObject = stream;
-        video.onloadeddata = () => loop();
-    } catch (e) {
-        console.error("Setup Error:", e);
-    }
-}
+        const camera = new THREE.PerspectiveCamera();
+
+        // 3D BACKGROUND (Infinite Room)
+        const roomGroup = new THREE.Group();
+        const grid = new THREE.GridHelper(200, 40, 0x00ffcc, 0x222222);
+        grid.rotation.x = Math.PI / 2;
+        grid.position.z = -50;
+        roomGroup.add(grid);
+
+        const ceilingGrid = grid.clone(); ceilingGrid.position.y = 50; roomGroup.add(ceilingGrid);
+        const floorGrid = grid.clone(); floorGrid.position.y = -50; roomGroup.add(floorGrid);
+        scene.add(roomGroup);
+
+        // LIGHTING
+        const mainLight = new THREE.DirectionalLight(0xffffff, 3);
+        mainLight.position.set(5, 10, 7.5);
+        scene.add(mainLight);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+        // MEDIAPIPE AI
+        const video = document.getElementById("webcam");
+        let landmarker;
+
+        async function setupApp() {
+            try {
+                // FIXED VERSIONING
+                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7/wasm");
+                landmarker = await FaceLandmarker.createFromOptions(vision, {
+                    baseOptions: { 
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                        delegate: "GPU" 
+                    },
+                    runningMode: "VIDEO"
+                });
+
+                // LOAD MODEL WITH RELATIVE PATH FIX
+                const loader = new GLTFLoader();
+                loader.load('./model.glb', (gltf) => {
+                    const model = gltf.scene;
+                    const box = new THREE.Box3().setFromObject(model);
+                    const size = box.getSize(new THREE.Vector3());
+                    const scale = 22 / Math.max(size.x, size.y, size.z);
+                    model.scale.set(scale, scale, scale);
+                    model.position.z = -25;
+                    scene.add(model);
+                    document.getElementById('loading').style.display = 'none';
+                    
+                    // Start rendering once model is ready
+                    animate(model);
+                }, undefined, (err) => {
+                    console.error("Path error or missing model.glb:", err);
+                    document.getElementById('loading').innerHTML = "<b>ERROR: model.glb not found</b><br>Ensure it is in the same GitHub folder.";
+                });
+
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+                video.srcObject = document.getElementById('v-prev').srcObject = stream;
+                video.onloadeddata = () => loop();
+            } catch (e) {
+                console.error("AI Setup Error:", e);
+                document.getElementById('loading').innerText = "AI SETUP FAILED: Check Camera Permissions";
+            }
+        }
+
+        function loop() {
+            const results = landmarker.detectForVideo(video, performance.now());
+            if (results.faceLandmarks?.[0]) {
+                const nose = results.faceLandmarks[0][1];
+                const aspect = window.innerHeight / window.innerWidth;
+                
+                rawPos.x = (nose.x - 0.5) * -SCREEN_W;
+                rawPos.y = (nose.y - 0.5) * -(SCREEN_W * aspect);
+                
+                const eyeDist = Math.abs(results.faceLandmarks[0][33].x - results.faceLandmarks[0][263].x);
+                rawPos.z = 22 / (eyeDist + 0.01);
+                document.getElementById('debug').innerText = `X: ${rawPos.x.toFixed(1)} Y: ${rawPos.y.toFixed(1)} Z: ${rawPos.z.toFixed(1)}`;
+            }
+            requestAnimationFrame(loop);
+        }
+
+        function animate(model) {
+            smoothPos.x += (rawPos.x - smoothPos.x) * LERP_FACTOR;
+            smoothPos.y += (rawPos.y - smoothPos.y) * LERP_FACTOR;
+            smoothPos.z += (rawPos.z - smoothPos.z) * LERP_FACTOR;
+
+            const n = Math.max(smoothPos.z, 0.1);
+            const aspect = window.innerHeight / window.innerWidth;
+            const l = -SCREEN_W/2 - smoothPos.x;
+            const r =  SCREEN_W/2 - smoothPos.x;
+            const b = -(SCREEN_W * aspect)/2 - smoothPos.y;
+            const t =  (SCREEN_W * aspect)/2 - smoothPos.y;
+
+            camera.projectionMatrix.makePerspective(l, r, t, b, n, 2000);
+            camera.position.set(smoothPos.x, smoothPos.y, smoothPos.z);
+            camera.lookAt(smoothPos.x, smoothPos.y, 0);
+
+            if (model) model.rotation.y += 0.005;
+            renderer.render(scene, camera);
+            requestAnimationFrame(() => animate(model));
+        }
+
+        setupApp();
+        window.addEventListener('resize', () => renderer.setSize(window.innerWidth, window.innerHeight));
+    </script>
+</body>
+</html>
