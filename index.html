@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Holographic Window – GLB Model</title>
+<title>Holographic Window – Single Camera GLB</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
@@ -71,7 +71,7 @@ canvas { display: block; }
 
 <div id="ui">
   <b>HOLOGRAPHIC WINDOW</b><br>
-  GLB Model<br>
+  Single Camera Mode<br>
   Target Depth: 500 mm<br>
   <span id="debug">Tracking…</span>
 </div>
@@ -96,9 +96,8 @@ import { FaceLandmarker, FilesetResolver }
 
 /* ───────── CONFIG ───────── */
 
-const SCREEN_W = 33.3;  // cm
-const TARGET_Z = 50.0;  // cm
-const IPD = 6.4;        // cm
+const SCREEN_W = 33.3;  // cm (15" MacBook Air)
+const TARGET_Z = 50.0;  // cm (500 mm)
 const LERP = 0.12;
 
 let raw = { x:0, y:0, z:TARGET_Z };
@@ -112,11 +111,9 @@ scene.fog = new THREE.FogExp2(0x000000, 0.01);
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);
-renderer.autoClear = false;
 document.body.appendChild(renderer.domElement);
 
-const camL = new THREE.PerspectiveCamera();
-const camR = new THREE.PerspectiveCamera();
+const camera = new THREE.PerspectiveCamera();
 
 /* Lighting */
 scene.add(new THREE.DirectionalLight(0xffffff, 3).position.set(10,20,20));
@@ -131,8 +128,8 @@ scene.add(grid);
 /* ───────── LOAD GLB ───────── */
 
 let model;
-
 const loader = new GLTFLoader();
+
 loader.load(
   "model.glb",
   gltf => {
@@ -141,21 +138,21 @@ loader.load(
     // Center & scale model
     const box = new THREE.Box3().setFromObject(model);
     const size = box.getSize(new THREE.Vector3()).length();
-    const scale = 30 / size;     // visual size in cm
+    const scale = 30 / size; // ~30 cm visual size
 
     model.scale.setScalar(scale);
     box.setFromObject(model);
     box.getCenter(model.position).multiplyScalar(-1);
 
-    model.position.z = -60;      // 60 cm behind screen
+    model.position.z = -60; // 60 cm behind screen
     scene.add(model);
 
     document.getElementById("loading").style.display = "none";
   },
   undefined,
-  e => {
+  err => {
     document.getElementById("loading").innerText = "MODEL LOAD FAILED";
-    console.error(e);
+    console.error(err);
   }
 );
 
@@ -195,7 +192,7 @@ function track() {
     const cx = (L.x + R.x)/2;
     const cy = (L.y + R.y)/2;
 
-    const aspect = innerHeight/innerWidth;
+    const aspect = innerHeight / innerWidth;
     const screenH = SCREEN_W * aspect;
 
     raw.x = (cx - 0.5) * -SCREEN_W;
@@ -213,28 +210,6 @@ function track() {
   requestAnimationFrame(track);
 }
 
-/* ───────── STEREO FRUSTUM ───────── */
-
-function applyEye(cam, offsetX) {
-  const aspect = innerHeight/innerWidth;
-  const screenH = SCREEN_W * aspect;
-
-  const n = 10, f = 2000;
-  const z = smooth.z;
-
-  const ex = smooth.x + offsetX;
-
-  const l = ((-SCREEN_W/2) - ex) * n / z;
-  const r = (( SCREEN_W/2) - ex) * n / z;
-  const b = ((-screenH/2) - smooth.y) * n / z;
-  const t = (( screenH/2) - smooth.y) * n / z;
-
-  cam.projectionMatrix.makePerspective(l,r,t,b,n,f);
-  cam.position.set(ex, smooth.y, z);
-  cam.quaternion.identity();
-  cam.updateMatrixWorld(true);
-}
-
 /* ───────── ANIMATE ───────── */
 
 function animate() {
@@ -242,18 +217,25 @@ function animate() {
   smooth.y += (raw.y - smooth.y) * LERP;
   smooth.z += (raw.z - smooth.z) * LERP;
 
+  const aspect = innerHeight / innerWidth;
+  const screenH = SCREEN_W * aspect;
+
+  const n = 10, f = 2000;
+  const z = smooth.z;
+
+  const l = ((-SCREEN_W/2) - smooth.x) * n / z;
+  const r = (( SCREEN_W/2) - smooth.x) * n / z;
+  const b = ((-screenH/2) - smooth.y) * n / z;
+  const t = (( screenH/2) - smooth.y) * n / z;
+
+  camera.projectionMatrix.makePerspective(l, r, t, b, n, f);
+  camera.position.set(smooth.x, smooth.y, z);
+  camera.quaternion.identity();
+  camera.updateMatrixWorld(true);
+
   if (model) model.rotation.y += 0.002;
 
-  renderer.clear();
-
-  applyEye(camL, -IPD/2);
-  renderer.render(scene, camL);
-
-  renderer.clearDepth();
-
-  applyEye(camR,  IPD/2);
-  renderer.render(scene, camR);
-
+  renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
 
