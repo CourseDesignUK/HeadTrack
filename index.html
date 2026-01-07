@@ -2,19 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Holographic Window – Hand Scale</title>
+<title>Model Viewer – Hand Scale (No Parallax)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
 body {
   margin: 0;
   overflow: hidden;
-  background: black;
+  background: #000;
   font-family: -apple-system, system-ui;
   color: #00ffcc;
 }
 canvas { display:block; }
 
+/* UI */
 #ui {
   position: fixed;
   top: 20px;
@@ -24,8 +25,10 @@ canvas { display:block; }
   border-radius: 12px;
   border: 1px solid #333;
   font-size: 12px;
+  z-index: 10;
 }
 
+/* Loading */
 #loading {
   position: fixed;
   inset: 0;
@@ -47,15 +50,30 @@ canvas { display:block; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Webcam preview */
 #v-prev {
   position: fixed;
   bottom: 20px;
   right: 20px;
   width: 140px;
-  opacity: 0.5;
+  opacity: 0.4;
   border: 1px solid #00ffcc;
   border-radius: 8px;
   transform: scaleX(-1);
+}
+
+/* Hand dots */
+.hand-dot {
+  position: fixed;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #00ffcc;
+  box-shadow: 0 0 12px #00ffcc;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  display: none;
+  z-index: 50;
 }
 </style>
 </head>
@@ -65,14 +83,16 @@ canvas { display:block; }
 <div id="loading"><div class="spinner"></div></div>
 
 <div id="ui">
-  <b>HAND SCALE MODE</b><br>
-  Two hands apart = grow<br>
-  Two hands together = shrink<br>
+  <b>NORMAL MODEL VIEW</b><br>
+  Hand scale enabled<br>
   <span id="debug">Waiting for hands…</span>
 </div>
 
 <video id="webcam" autoplay playsinline style="display:none"></video>
 <video id="v-prev" autoplay playsinline></video>
+
+<div id="dotL" class="hand-dot"></div>
+<div id="dotR" class="hand-dot"></div>
 
 <script type="importmap">
 {
@@ -89,27 +109,32 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { HandLandmarker, FilesetResolver }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7";
 
-/* ───────── THREE ───────── */
+/* ───────── THREE SETUP ───────── */
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x000000, 0.01);
+scene.background = new THREE.Color(0x000000);
 
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 10, 2000);
-camera.position.set(0,0,60);
+/* Fixed, normal camera */
+const camera = new THREE.PerspectiveCamera(
+  45,
+  innerWidth / innerHeight,
+  0.1,
+  1000
+);
+camera.position.set(0, 0, 80);
 
 /* Lighting */
-scene.add(new THREE.DirectionalLight(0xffffff, 3).position.set(10,20,20));
+scene.add(new THREE.DirectionalLight(0xffffff, 2).position.set(10,20,20));
 scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 
-/* Grid */
-const grid = new THREE.GridHelper(500, 50, 0x00ffcc, 0x222222);
-grid.rotation.x = Math.PI/2;
-grid.position.z = -120;
+/* Optional ground grid */
+const grid = new THREE.GridHelper(200, 20, 0x00ffcc, 0x222222);
+grid.position.y = -25;
 scene.add(grid);
 
 /* ───────── LOAD MODEL ───────── */
@@ -119,8 +144,7 @@ let baseScale = 1;
 let targetScale = 1;
 let smoothScale = 1;
 
-const loader = new GLTFLoader();
-loader.load("model.glb", gltf => {
+new GLTFLoader().load("model.glb", gltf => {
   model = gltf.scene;
 
   const box = new THREE.Box3().setFromObject(model);
@@ -129,7 +153,6 @@ loader.load("model.glb", gltf => {
 
   model.scale.setScalar(baseScale);
   box.getCenter(model.position).multiplyScalar(-1);
-  model.position.z = -60;
 
   scene.add(model);
   document.getElementById("loading").style.display = "none";
@@ -138,6 +161,9 @@ loader.load("model.glb", gltf => {
 /* ───────── HAND TRACKING ───────── */
 
 const video = document.getElementById("webcam");
+const dotL = document.getElementById("dotL");
+const dotR = document.getElementById("dotR");
+
 let handLandmarker;
 let baselineDist = null;
 
@@ -164,6 +190,12 @@ async function initHands() {
   };
 }
 
+function updateDot(dot, lm) {
+  dot.style.left = `${lm.x * innerWidth}px`;
+  dot.style.top  = `${lm.y * innerHeight}px`;
+  dot.style.display = "block";
+}
+
 function trackHands() {
   const res = handLandmarker.detectForVideo(video, performance.now());
 
@@ -171,16 +203,19 @@ function trackHands() {
     const a = res.landmarks[0][8]; // index tip
     const b = res.landmarks[1][8];
 
-    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    updateDot(dotL, a);
+    updateDot(dotR, b);
 
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
     if (!baselineDist) baselineDist = d;
 
-    const scaleFactor = THREE.MathUtils.clamp(d / baselineDist, 0.4, 3.0);
-    targetScale = baseScale * scaleFactor;
+    const factor = THREE.MathUtils.clamp(d / baselineDist, 0.4, 3.0);
+    targetScale = baseScale * factor;
 
     document.getElementById("debug").innerText =
-      `Scale: ${scaleFactor.toFixed(2)}×`;
+      `Scale ${factor.toFixed(2)}×`;
   } else {
+    dotL.style.display = dotR.style.display = "none";
     baselineDist = null;
     document.getElementById("debug").innerText = "Show two hands";
   }
@@ -188,14 +223,14 @@ function trackHands() {
   requestAnimationFrame(trackHands);
 }
 
-/* ───────── ANIMATE ───────── */
+/* ───────── ANIMATION LOOP ───────── */
 
 function animate() {
   smoothScale += (targetScale - smoothScale) * 0.15;
 
   if (model) {
     model.scale.setScalar(smoothScale);
-    model.rotation.y += 0.002;
+    model.rotation.y += 0.003; // gentle auto-rotate
   }
 
   renderer.render(scene, camera);
@@ -203,9 +238,10 @@ function animate() {
 }
 
 initHands();
+
 addEventListener("resize", ()=>{
   renderer.setSize(innerWidth, innerHeight);
-  camera.aspect = innerWidth/innerHeight;
+  camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 });
 </script>
