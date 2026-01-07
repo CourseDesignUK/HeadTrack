@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>M3 MacBook Air - Holographic Window (Stable & Static)</title>
+    <title>M3 MacBook Air - Holographic Window (Stable Cube)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; color: #00ffcc; }
         canvas { display: block; }
@@ -17,13 +17,13 @@
 
     <div id="loading">
         <div class="spinner"></div>
-        <b>CALIBRATING FOR M3...</b>
+        <b>CALIBRATING HOLOGRAPHIC WINDOW...</b>
     </div>
 
     <div id="ui">
         <b id="status">WINDOW ACTIVE</b>
         <div class="data" id="debug">Tracking eye position...</div>
-        <div style="margin-top:10px; font-size: 10px; color: #888;">Calibrated: 15" MBA (33.3cm)</div>
+        <div style="margin-top:10px; font-size: 10px; color: #888;">15" MBA (33.3cm) Calibration</div>
     </div>
 
     <video id="webcam" autoplay playsinline style="display:none;"></video>
@@ -40,7 +40,6 @@
 
     <script type="module">
         import * as THREE from 'three';
-        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7";
 
         // --- CONFIG ---
@@ -51,7 +50,7 @@
 
         // --- SCENE SETUP ---
         const scene = new THREE.Scene();
-        scene.fog = new THREE.Fog(0x000000, 10, 200);
+        scene.fog = new THREE.Fog(0x000000, 20, 250);
         
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setPixelRatio(window.devicePixelRatio);
@@ -60,19 +59,36 @@
 
         const camera = new THREE.PerspectiveCamera();
 
-        // --- ORIGINAL LIGHTING ---
+        // --- LIGHTING (Original Balance) ---
         const mainLight = new THREE.DirectionalLight(0xffffff, 3);
-        mainLight.position.set(5, 10, 7.5);
+        mainLight.position.set(10, 20, 15);
         scene.add(mainLight);
-        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 
-        // --- GRID WORLD ---
-        const grid = new THREE.GridHelper(300, 60, 0x00ffcc, 0x222222);
+        // --- GRID ROOM ---
+        const grid = new THREE.GridHelper(400, 80, 0x00ffcc, 0x222222);
         grid.rotation.x = Math.PI / 2;
-        grid.position.z = -60;
+        grid.position.z = -70;
         scene.add(grid);
 
-        // --- AI & MODEL LOADING ---
+        // --- CUBE OBJECT ---
+        const geometry = new THREE.BoxGeometry(15, 15, 15);
+        const material = new THREE.MeshStandardMaterial({ 
+            color: 0x00ffcc, 
+            metalness: 0.5, 
+            roughness: 0.2,
+            wireframe: false 
+        });
+        const cube = new THREE.Mesh(geometry, material);
+        
+        // Disable Frustum Culling so it never disappears head-on
+        cube.frustumCulled = false;
+        
+        // Position cube deeper in the screen
+        cube.position.set(0, 0, -40);
+        scene.add(cube);
+
+        // --- AI TRACKING ---
         const video = document.getElementById("webcam");
         let landmarker;
 
@@ -87,35 +103,16 @@
                     runningMode: "VIDEO"
                 });
 
-                const loader = new GLTFLoader();
-                loader.load('./model.glb', (gltf) => {
-                    const model = gltf.scene;
-                    
-                    // Center and Scale
-                    const box = new THREE.Box3().setFromObject(model);
-                    const center = box.getCenter(new THREE.Vector3());
-                    model.position.sub(center); 
-                    
-                    const wrapper = new THREE.Group();
-                    wrapper.add(model);
-
-                    const size = box.getSize(new THREE.Vector3());
-                    const scale = 22 / Math.max(size.x, size.y, size.z);
-                    wrapper.scale.set(scale, scale, scale);
-                    wrapper.position.set(0, 0, -40); // Offset into the screen
-                    scene.add(wrapper);
-                    
-                    document.getElementById('loading').style.display = 'none';
-                    animate(wrapper);
-                }, undefined, (err) => {
-                    document.getElementById('loading').innerHTML = "ERROR: model.glb not found";
-                });
-
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
                 video.srcObject = document.getElementById('v-prev').srcObject = stream;
-                video.onloadeddata = () => loop();
+                
+                video.onloadeddata = () => {
+                    document.getElementById('loading').style.display = 'none';
+                    loop();
+                    animate();
+                };
             } catch (e) {
-                document.getElementById('loading').innerText = "AI SETUP FAILED";
+                document.getElementById('loading').innerText = "CAMERA ACCESS DENIED";
             }
         }
 
@@ -131,15 +128,17 @@
                     rawPos.y = (nose.y - 0.5) * -(SCREEN_W * aspect);
                     
                     const eyeDist = Math.hypot(landmarks[33].x - landmarks[263].x, landmarks[33].y - landmarks[263].y);
-                    rawPos.z = Math.max(32 / (eyeDist + 0.01), 15); 
+                    // Clamp Z distance so math doesn't break when leaning in
+                    rawPos.z = Math.max(35 / (eyeDist + 0.01), 15); 
 
-                    document.getElementById('debug').innerText = `Z-Dist: ${rawPos.z.toFixed(1)}cm`;
+                    document.getElementById('debug').innerText = `X: ${rawPos.x.toFixed(1)} Z: ${rawPos.z.toFixed(1)}cm`;
                 }
             }
             requestAnimationFrame(loop);
         }
 
-        function animate(model) {
+        function animate() {
+            // Smooth movement
             smoothPos.x += (rawPos.x - smoothPos.x) * LERP_FACTOR;
             smoothPos.y += (rawPos.y - smoothPos.y) * LERP_FACTOR;
             smoothPos.z += (rawPos.z - smoothPos.z) * LERP_FACTOR;
@@ -147,7 +146,8 @@
             const aspect = window.innerHeight / window.innerWidth;
             const screenH = SCREEN_W * aspect;
 
-            const n = 0.5; 
+            // OFF-AXIS MATH
+            const n = 0.5; // Near plane buffer
             const f = 1000;
             const z = Math.max(smoothPos.z, 5); 
             
@@ -156,14 +156,15 @@
             const b = ((-screenH / 2) - smoothPos.y) * n / z;
             const t = ((screenH / 2) - smoothPos.y) * n / z;
 
+            // Apply custom projection for the "Window" effect
             camera.projectionMatrix.makePerspective(l, r, t, b, n, f);
+            
+            // Camera stays at eye position but rotation remains flat
             camera.position.set(smoothPos.x, smoothPos.y, smoothPos.z);
             camera.quaternion.set(0, 0, 0, 1); 
 
-            // NO SPIN: model.rotation is not updated here
-
             renderer.render(scene, camera);
-            requestAnimationFrame(() => animate(model));
+            requestAnimationFrame(animate);
         }
 
         setupApp();
