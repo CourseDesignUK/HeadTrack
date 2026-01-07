@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>M3 MacBook Air - Holographic Window</title>
+    <title>M3 MacBook Air - Holographic Window (High Visibility)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; color: #00ffcc; }
         canvas { display: block; }
@@ -44,7 +44,7 @@
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7";
 
         // --- CONFIG ---
-        const SCREEN_W = 33.3; // Physical width of 15" MBA in cm
+        const SCREEN_W = 33.3; 
         let rawPos = { x: 0, y: 0, z: 50 }; 
         let smoothPos = { x: 0, y: 0, z: 50 };
         const LERP_FACTOR = 0.15;
@@ -60,6 +60,18 @@
 
         const camera = new THREE.PerspectiveCamera();
 
+        // --- LIGHTING (Enhanced Studio Setup) ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.5); // High base light
+        scene.add(ambientLight);
+
+        const keyLight = new THREE.DirectionalLight(0xffffff, 3.0);
+        keyLight.position.set(20, 30, 40);
+        scene.add(keyLight);
+
+        const fillLight = new THREE.PointLight(0x00ffcc, 2.0);
+        fillLight.position.set(-25, 0, 20);
+        scene.add(fillLight);
+
         // --- WORLD OBJECTS ---
         const roomGroup = new THREE.Group();
         const grid = new THREE.GridHelper(200, 40, 0x00ffcc, 0x222222);
@@ -71,13 +83,7 @@
         const floorGrid = grid.clone(); floorGrid.position.y = -50; roomGroup.add(floorGrid);
         scene.add(roomGroup);
 
-        // --- LIGHTING ---
-        const mainLight = new THREE.PointLight(0xffffff, 1000);
-        mainLight.position.set(0, 20, 20);
-        scene.add(mainLight);
-        scene.add(new THREE.AmbientLight(0xffffff, 1.0));
-
-        // --- MEDIAPIPE & MODEL LOADING ---
+        // --- AI & MODEL ---
         const video = document.getElementById("webcam");
         let landmarker;
 
@@ -95,11 +101,20 @@
                 const loader = new GLTFLoader();
                 loader.load('./model.glb', (gltf) => {
                     const model = gltf.scene;
+                    
+                    // BRIGHTNESS FIX: Force materials to react to light
+                    model.traverse((child) => {
+                        if (child.isMesh) {
+                            child.material.needsUpdate = true;
+                            child.material.emissive = new THREE.Color(0x111111); // Subtle self-illumination
+                        }
+                    });
+
                     const box = new THREE.Box3().setFromObject(model);
                     const size = box.getSize(new THREE.Vector3());
-                    const scale = 20 / Math.max(size.x, size.y, size.z);
+                    const scale = 22 / Math.max(size.x, size.y, size.z);
                     model.scale.set(scale, scale, scale);
-                    model.position.set(0, 0, -25);
+                    model.position.set(0, 0, -30);
                     scene.add(model);
                     
                     document.getElementById('loading').style.display = 'none';
@@ -126,16 +141,14 @@
                     const nose = landmarks[1];
                     const aspect = window.innerHeight / window.innerWidth;
                     
-                    // X/Y Calculation relative to screen center
                     rawPos.x = (nose.x - 0.5) * -SCREEN_W;
                     rawPos.y = (nose.y - 0.5) * -(SCREEN_W * aspect);
                     
-                    // Z Calculation (Distance from screen)
                     const eyeDist = Math.hypot(
                         landmarks[33].x - landmarks[263].x,
                         landmarks[33].y - landmarks[263].y
                     );
-                    rawPos.z = 30 / (eyeDist + 0.01); // Approx distance in cm
+                    rawPos.z = 32 / (eyeDist + 0.01); 
 
                     document.getElementById('debug').innerText = `X: ${rawPos.x.toFixed(1)} Y: ${rawPos.y.toFixed(1)} Z: ${rawPos.z.toFixed(1)}`;
                 }
@@ -144,7 +157,6 @@
         }
 
         function animate(model) {
-            // Smooth eye tracking
             smoothPos.x += (rawPos.x - smoothPos.x) * LERP_FACTOR;
             smoothPos.y += (rawPos.y - smoothPos.y) * LERP_FACTOR;
             smoothPos.z += (rawPos.z - smoothPos.z) * LERP_FACTOR;
@@ -152,10 +164,9 @@
             const aspect = window.innerHeight / window.innerWidth;
             const screenH = SCREEN_W * aspect;
 
-            // Off-axis projection math
-            // We calculate how much the frustum needs to skew based on eye position
-            const n = 0.1; // Near plane
-            const f = 1000; // Far plane
+            // Off-axis projection (The "Window" effect)
+            const n = 0.1; 
+            const f = 1000;
             
             const l = ((-SCREEN_W / 2) - smoothPos.x) * n / smoothPos.z;
             const r = ((SCREEN_W / 2) - smoothPos.x) * n / smoothPos.z;
@@ -163,14 +174,14 @@
             const t = ((screenH / 2) - smoothPos.y) * n / smoothPos.z;
 
             camera.projectionMatrix.makePerspective(l, r, t, b, n, f);
-            
-            // Set camera to eye position
             camera.position.set(smoothPos.x, smoothPos.y, smoothPos.z);
-            
-            // Critical: Keep camera rotation fixed (facing the screen)
             camera.quaternion.set(0, 0, 0, 1); 
 
-            if (model) model.rotation.y += 0.005;
+            if (model) {
+                model.rotation.y += 0.008;
+                // Keep model light-responsive
+                model.rotation.x = Math.sin(Date.now() * 0.001) * 0.1;
+            }
 
             renderer.render(scene, camera);
             requestAnimationFrame(() => animate(model));
