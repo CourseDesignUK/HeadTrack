@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>M3 MacBook Air - Holographic Window (Head-On Fix)</title>
+    <title>M3 MacBook Air - Holographic Window (Stable & Static)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; color: #00ffcc; }
         canvas { display: block; }
@@ -17,13 +17,13 @@
 
     <div id="loading">
         <div class="spinner"></div>
-        <b>INITIALIZING M3 HOLOGRAPHIC CORE...</b>
+        <b>CALIBRATING FOR M3...</b>
     </div>
 
     <div id="ui">
         <b id="status">WINDOW ACTIVE</b>
-        <div class="data" id="debug">Tracking...</div>
-        <div style="margin-top:10px; font-size: 10px; color: #888;">15" MacBook Air Calibration</div>
+        <div class="data" id="debug">Tracking eye position...</div>
+        <div style="margin-top:10px; font-size: 10px; color: #888;">Calibrated: 15" MBA (33.3cm)</div>
     </div>
 
     <video id="webcam" autoplay playsinline style="display:none;"></video>
@@ -47,31 +47,29 @@
         const SCREEN_W = 33.3; 
         let rawPos = { x: 0, y: 0, z: 60 }; 
         let smoothPos = { x: 0, y: 0, z: 60 };
-        const LERP_FACTOR = 0.12;
+        const LERP_FACTOR = 0.15;
 
         // --- SCENE SETUP ---
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x020202);
+        scene.fog = new THREE.Fog(0x000000, 10, 200);
         
-        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setPixelRatio(window.devicePixelRatio);
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 3.0; // MAX BRIGHTNESS
         document.body.appendChild(renderer.domElement);
 
         const camera = new THREE.PerspectiveCamera();
 
-        // --- LIGHTS ---
-        scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 6.0));
-        const pLight = new THREE.PointLight(0xffffff, 800);
-        pLight.position.set(0, 15, 30);
-        scene.add(pLight);
+        // --- ORIGINAL LIGHTING ---
+        const mainLight = new THREE.DirectionalLight(0xffffff, 3);
+        mainLight.position.set(5, 10, 7.5);
+        scene.add(mainLight);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 
         // --- GRID WORLD ---
-        const grid = new THREE.GridHelper(400, 80, 0x00ffcc, 0x111111);
+        const grid = new THREE.GridHelper(300, 60, 0x00ffcc, 0x222222);
         grid.rotation.x = Math.PI / 2;
-        grid.position.z = -80; // Pushed back grid
+        grid.position.z = -60;
         scene.add(grid);
 
         // --- AI & MODEL LOADING ---
@@ -93,43 +91,31 @@
                 loader.load('./model.glb', (gltf) => {
                     const model = gltf.scene;
                     
-                    // RE-CENTER AND BRIGHTEN
+                    // Center and Scale
                     const box = new THREE.Box3().setFromObject(model);
                     const center = box.getCenter(new THREE.Vector3());
-                    model.position.sub(center); // Move model's internal center to 0,0,0
+                    model.position.sub(center); 
                     
                     const wrapper = new THREE.Group();
                     wrapper.add(model);
 
-                    model.traverse((child) => {
-                        if (child.isMesh) {
-                            child.material = new THREE.MeshStandardMaterial({
-                                color: 0xffffff,
-                                metalness: 0.7,
-                                roughness: 0.1,
-                                emissive: 0xffffff,
-                                emissiveIntensity: 0.2
-                            });
-                        }
-                    });
-
                     const size = box.getSize(new THREE.Vector3());
-                    const scale = 20 / Math.max(size.x, size.y, size.z);
+                    const scale = 22 / Math.max(size.x, size.y, size.z);
                     wrapper.scale.set(scale, scale, scale);
-                    wrapper.position.set(0, 0, -40); // Deep offset so it doesn't clip
+                    wrapper.position.set(0, 0, -40); // Offset into the screen
                     scene.add(wrapper);
                     
                     document.getElementById('loading').style.display = 'none';
                     animate(wrapper);
                 }, undefined, (err) => {
-                    document.getElementById('loading').innerHTML = "ERROR: model.glb missing";
+                    document.getElementById('loading').innerHTML = "ERROR: model.glb not found";
                 });
 
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
                 video.srcObject = document.getElementById('v-prev').srcObject = stream;
                 video.onloadeddata = () => loop();
             } catch (e) {
-                document.getElementById('loading').innerText = "AI/CAMERA ERROR";
+                document.getElementById('loading').innerText = "AI SETUP FAILED";
             }
         }
 
@@ -145,8 +131,7 @@
                     rawPos.y = (nose.y - 0.5) * -(SCREEN_W * aspect);
                     
                     const eyeDist = Math.hypot(landmarks[33].x - landmarks[263].x, landmarks[33].y - landmarks[263].y);
-                    // Prevent Z from going too low (which breaks the math)
-                    rawPos.z = Math.max(30 / (eyeDist + 0.01), 15); 
+                    rawPos.z = Math.max(32 / (eyeDist + 0.01), 15); 
 
                     document.getElementById('debug').innerText = `Z-Dist: ${rawPos.z.toFixed(1)}cm`;
                 }
@@ -162,12 +147,10 @@
             const aspect = window.innerHeight / window.innerWidth;
             const screenH = SCREEN_W * aspect;
 
-            // OFF-AXIS CALCULATION
-            const n = 0.5; // Slightly larger Near plane for stability
-            const f = 2000;
-            
-            // The magic: projecting based on the eye's distance (z) relative to the screen (0)
+            const n = 0.5; 
+            const f = 1000;
             const z = Math.max(smoothPos.z, 5); 
+            
             const l = ((-SCREEN_W / 2) - smoothPos.x) * n / z;
             const r = ((SCREEN_W / 2) - smoothPos.x) * n / z;
             const b = ((-screenH / 2) - smoothPos.y) * n / z;
@@ -177,9 +160,7 @@
             camera.position.set(smoothPos.x, smoothPos.y, smoothPos.z);
             camera.quaternion.set(0, 0, 0, 1); 
 
-            if (model) {
-                model.rotation.y += 0.01;
-            }
+            // NO SPIN: model.rotation is not updated here
 
             renderer.render(scene, camera);
             requestAnimationFrame(() => animate(model));
