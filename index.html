@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>M3 MacBook Air - Holographic Window (Ultra Bright + Reflections)</title>
+    <title>M3 MacBook Air - Holographic Window (Head-On Fix)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; color: #00ffcc; }
         canvas { display: block; }
@@ -56,27 +56,22 @@
         const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
         renderer.setPixelRatio(window.devicePixelRatio);
         renderer.setSize(window.innerWidth, window.innerHeight);
-        
-        // --- HDR LIGHTING SETTINGS ---
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 2.8; // High exposure boost
-        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMappingExposure = 3.0; // MAX BRIGHTNESS
         document.body.appendChild(renderer.domElement);
 
         const camera = new THREE.PerspectiveCamera();
 
         // --- LIGHTS ---
-        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 5.0); // Extreme sky/ground light
-        scene.add(hemiLight);
-
-        const pointLight = new THREE.PointLight(0xffffff, 500); 
-        pointLight.position.set(0, 10, 20);
-        scene.add(pointLight);
+        scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 6.0));
+        const pLight = new THREE.PointLight(0xffffff, 800);
+        pLight.position.set(0, 15, 30);
+        scene.add(pLight);
 
         // --- GRID WORLD ---
-        const grid = new THREE.GridHelper(300, 60, 0x00ffcc, 0x111111);
+        const grid = new THREE.GridHelper(400, 80, 0x00ffcc, 0x111111);
         grid.rotation.x = Math.PI / 2;
-        grid.position.z = -50;
+        grid.position.z = -80; // Pushed back grid
         scene.add(grid);
 
         // --- AI & MODEL LOADING ---
@@ -94,41 +89,40 @@
                     runningMode: "VIDEO"
                 });
 
-                // --- GENERATE REFLECTION MAP ---
-                const pmremGenerator = new THREE.PMREMGenerator(renderer);
-                pmremGenerator.compileEquirectangularShader();
-                const envRT = pmremGenerator.fromScene(scene); // Model will reflect the grid and lights
-
                 const loader = new GLTFLoader();
                 loader.load('./model.glb', (gltf) => {
                     const model = gltf.scene;
                     
-                    // ULTRA-BRIGHT MATERIAL OVERRIDE
+                    // RE-CENTER AND BRIGHTEN
+                    const box = new THREE.Box3().setFromObject(model);
+                    const center = box.getCenter(new THREE.Vector3());
+                    model.position.sub(center); // Move model's internal center to 0,0,0
+                    
+                    const wrapper = new THREE.Group();
+                    wrapper.add(model);
+
                     model.traverse((child) => {
                         if (child.isMesh) {
                             child.material = new THREE.MeshStandardMaterial({
                                 color: 0xffffff,
-                                metalness: 0.9,      // High reflectivity
-                                roughness: 0.1,      // Shiny surface
-                                envMap: envRT.texture,
-                                envMapIntensity: 2.5, // Boost reflections
+                                metalness: 0.7,
+                                roughness: 0.1,
                                 emissive: 0xffffff,
-                                emissiveIntensity: 0.15 // Faint inner glow so it's never dark
+                                emissiveIntensity: 0.2
                             });
                         }
                     });
 
-                    const box = new THREE.Box3().setFromObject(model);
                     const size = box.getSize(new THREE.Vector3());
-                    const scale = 24 / Math.max(size.x, size.y, size.z);
-                    model.scale.set(scale, scale, scale);
-                    model.position.set(0, 0, -25);
-                    scene.add(model);
+                    const scale = 20 / Math.max(size.x, size.y, size.z);
+                    wrapper.scale.set(scale, scale, scale);
+                    wrapper.position.set(0, 0, -40); // Deep offset so it doesn't clip
+                    scene.add(wrapper);
                     
                     document.getElementById('loading').style.display = 'none';
-                    animate(model);
+                    animate(wrapper);
                 }, undefined, (err) => {
-                    document.getElementById('loading').innerHTML = "ERROR: model.glb not found in root";
+                    document.getElementById('loading').innerHTML = "ERROR: model.glb missing";
                 });
 
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
@@ -150,11 +144,9 @@
                     rawPos.x = (nose.x - 0.5) * -SCREEN_W;
                     rawPos.y = (nose.y - 0.5) * -(SCREEN_W * aspect);
                     
-                    const eyeDist = Math.hypot(
-                        landmarks[33].x - landmarks[263].x,
-                        landmarks[33].y - landmarks[263].y
-                    );
-                    rawPos.z = 35 / (eyeDist + 0.01); 
+                    const eyeDist = Math.hypot(landmarks[33].x - landmarks[263].x, landmarks[33].y - landmarks[263].y);
+                    // Prevent Z from going too low (which breaks the math)
+                    rawPos.z = Math.max(30 / (eyeDist + 0.01), 15); 
 
                     document.getElementById('debug').innerText = `Z-Dist: ${rawPos.z.toFixed(1)}cm`;
                 }
@@ -170,13 +162,16 @@
             const aspect = window.innerHeight / window.innerWidth;
             const screenH = SCREEN_W * aspect;
 
-            // OFF-AXIS HOLOGRAPHIC PROJECTION
-            const n = 0.1; 
+            // OFF-AXIS CALCULATION
+            const n = 0.5; // Slightly larger Near plane for stability
             const f = 2000;
-            const l = ((-SCREEN_W / 2) - smoothPos.x) * n / smoothPos.z;
-            const r = ((SCREEN_W / 2) - smoothPos.x) * n / smoothPos.z;
-            const b = ((-screenH / 2) - smoothPos.y) * n / smoothPos.z;
-            const t = ((screenH / 2) - smoothPos.y) * n / smoothPos.z;
+            
+            // The magic: projecting based on the eye's distance (z) relative to the screen (0)
+            const z = Math.max(smoothPos.z, 5); 
+            const l = ((-SCREEN_W / 2) - smoothPos.x) * n / z;
+            const r = ((SCREEN_W / 2) - smoothPos.x) * n / z;
+            const b = ((-screenH / 2) - smoothPos.y) * n / z;
+            const t = ((screenH / 2) - smoothPos.y) * n / z;
 
             camera.projectionMatrix.makePerspective(l, r, t, b, n, f);
             camera.position.set(smoothPos.x, smoothPos.y, smoothPos.z);
@@ -184,7 +179,6 @@
 
             if (model) {
                 model.rotation.y += 0.01;
-                model.rotation.z += 0.002;
             }
 
             renderer.render(scene, camera);
