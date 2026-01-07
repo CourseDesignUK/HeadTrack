@@ -1,32 +1,31 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>M3 MacBook Air - Fixed Tracking</title>
+    <title>MBA M3 - Tracking Fix</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; color: #00ffcc; }
         canvas { display: block; }
-        #ui { position: absolute; top: 20px; left: 20px; color: #00ffcc; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 10px; border: 1px solid #333; z-index: 10; font-size: 12px; }
+        #ui { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 10px; border: 1px solid #333; z-index: 10; width: 200px; }
         #v-prev { position: absolute; bottom: 20px; right: 20px; width: 140px; border-radius: 8px; border: 1px solid #00ffcc; transform: scaleX(-1); }
-        #debug { margin-top: 10px; font-family: monospace; color: white; font-size: 10px; }
+        .data { font-family: monospace; color: white; font-size: 11px; margin-top: 5px; }
     </style>
 </head>
 <body>
 
     <div id="ui">
-        <b>SYSTEM STATUS</b>
-        <div id="status-ai">AI: Initializing...</div>
-        <div id="status-cam">Camera: Waiting...</div>
-        <div id="debug">X: 0 | Y: 0 | Z: 0</div>
+        <b id="status">INIT: STARTING...</b>
+        <div class="data" id="debugX">X: 0</div>
+        <div class="data" id="debugY">Y: 0</div>
+        <div class="data" id="debugZ">Z: 0</div>
     </div>
 
-    <video id="webcam" style="display:none;" autoplay playsinline></video>
+    <video id="webcam" autoplay playsinline style="display:none;"></video>
     <video id="v-prev" autoplay playsinline></video>
 
     <script type="importmap">
         {
             "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
             }
         }
     </script>
@@ -35,113 +34,100 @@
         import * as THREE from 'three';
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7";
 
-        // --- CALIBRATION ---
-        const SCREEN_W_CM = 33.3; // Physical width of 15" MBA
+        const SCREEN_W = 33.3; 
         let rawPos = { x: 0, y: 0, z: 50 };
         let smoothPos = { x: 0, y: 0, z: 50 };
 
-        // --- THREE.JS SCENE ---
+        // --- SCENE ---
         const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera();
         const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setPixelRatio(window.devicePixelRatio);
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
-        const camera = new THREE.PerspectiveCamera();
+        const cube = new THREE.Mesh(new THREE.BoxGeometry(15, 15, 15), new THREE.MeshNormalMaterial());
+        cube.position.z = -30;
+        scene.add(cube);
 
-        // 3D Grid Room
-        const room = new THREE.Mesh(
-            new THREE.BoxGeometry(100, 100, 100),
-            new THREE.MeshBasicMaterial({ color: 0x222222, wireframe: true, side: THREE.BackSide })
-        );
+        const room = new THREE.GridHelper(100, 10, 0x444444, 0x222222);
+        room.rotation.x = Math.PI/2;
         room.position.z = -50;
         scene.add(room);
 
-        const cube = new THREE.Mesh(new THREE.BoxGeometry(15, 15, 15), new THREE.MeshNormalMaterial());
-        cube.position.z = -25;
-        scene.add(cube);
-
-        // --- MEDIAPIPE AI ---
+        // --- AI ---
         const video = document.getElementById("webcam");
-        const videoPrev = document.getElementById("v-prev");
-        const debug = document.getElementById("debug");
-        let faceLandmarker;
+        let landmarker;
 
-        async function initAI() {
+        async function setup() {
             try {
+                document.getElementById('status').innerText = "INIT: LOADING AI...";
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7/wasm");
-                faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                
+                landmarker = await FaceLandmarker.createFromOptions(vision, {
                     baseOptions: { 
-                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
                         delegate: "GPU" 
                     },
                     runningMode: "VIDEO"
                 });
-                document.getElementById("status-ai").innerText = "AI: ONLINE";
 
+                document.getElementById('status').innerText = "INIT: CAMERA...";
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
-                video.srcObject = videoPrev.srcObject = stream;
-                video.onloadeddata = () => {
-                    document.getElementById("status-cam").innerText = "Camera: STREAMING";
-                    predict();
-                };
-            } catch (err) {
-                console.error(err);
-                document.getElementById("status-ai").innerText = "ERROR: " + err.message;
-            }
-        }
-
-        function predict() {
-            if (!faceLandmarker) return;
-            
-            const results = faceLandmarker.detectForVideo(video, performance.now());
-            
-            if (results.faceLandmarks && results.faceLandmarks[0]) {
-                const nose = results.faceLandmarks[0][1]; // Nose tip
-                const screenH_CM = SCREEN_W_CM * (window.innerHeight / window.innerWidth);
-
-                // Update Raw Positions
-                rawPos.x = (nose.x - 0.5) * -SCREEN_W_CM;
-                rawPos.y = (nose.y - 0.5) * -screenH_CM;
+                video.srcObject = document.getElementById('v-prev').srcObject = stream;
                 
-                // Eye distance for Z
-                const eyeL = results.faceLandmarks[0][33];
-                const eyeR = results.faceLandmarks[0][263];
-                const dist = Math.sqrt(Math.pow(eyeL.x - eyeR.x, 2) + Math.pow(eyeL.y - eyeR.y, 2));
-                rawPos.z = 18 / (dist + 0.01);
-
-                debug.innerText = `X: ${rawPos.x.toFixed(1)} | Y: ${rawPos.y.toFixed(1)} | Z: ${rawPos.z.toFixed(1)}`;
+                video.onloadeddata = () => {
+                    document.getElementById('status').innerText = "STATUS: ACTIVE";
+                    loop();
+                };
+            } catch (e) {
+                document.getElementById('status').innerText = "ERROR: " + e.message;
+                console.error(e);
             }
-            requestAnimationFrame(predict);
         }
 
-        function animate() {
-            // 1. Smooth the data
+        function loop() {
+            const now = performance.now();
+            const results = landmarker.detectForVideo(video, now);
+
+            if (results.faceLandmarks && results.faceLandmarks[0]) {
+                const nose = results.faceLandmarks[0][1];
+                const aspect = window.innerHeight / window.innerWidth;
+                
+                // DATA EXTRACTION
+                rawPos.x = (nose.x - 0.5) * -SCREEN_W;
+                rawPos.y = (nose.y - 0.5) * -(SCREEN_W * aspect);
+                
+                const eyeDist = Math.abs(results.faceLandmarks[0][33].x - results.faceLandmarks[0][263].x);
+                rawPos.z = 20 / (eyeDist + 0.01);
+
+                // UI UPDATE
+                document.getElementById('debugX').innerText = `X: ${rawPos.x.toFixed(2)}`;
+                document.getElementById('debugY').innerText = `Y: ${rawPos.y.toFixed(2)}`;
+                document.getElementById('debugZ').innerText = `Z: ${rawPos.z.toFixed(2)}`;
+            }
+
+            // SMOOTHING
             smoothPos.x += (rawPos.x - smoothPos.x) * 0.15;
             smoothPos.y += (rawPos.y - smoothPos.y) * 0.15;
             smoothPos.z += (rawPos.z - smoothPos.z) * 0.15;
 
-            // 2. Calculate Off-Axis Projection
-            const screenH_CM = SCREEN_W_CM * (window.innerHeight / window.innerWidth);
-            const n = Math.max(smoothPos.z, 0.1); 
-            const f = 2000;
-            const l = -SCREEN_W_CM / 2 - smoothPos.x;
-            const r =  SCREEN_W_CM / 2 - smoothPos.x;
-            const b = -screenH_CM / 2 - smoothPos.y;
-            const t =  screenH_CM / 2 - smoothPos.y;
+            // CAMERA MATRIX
+            const n = Math.max(smoothPos.z, 0.1);
+            const l = -SCREEN_W/2 - smoothPos.x;
+            const r =  SCREEN_W/2 - smoothPos.x;
+            const b = -(SCREEN_W * (window.innerHeight/window.innerWidth))/2 - smoothPos.y;
+            const t =  (SCREEN_W * (window.innerHeight/window.innerWidth))/2 - smoothPos.y;
 
-            // 3. Apply Matrix to Camera
-            camera.projectionMatrix.makePerspective(l, r, t, b, n, f);
+            camera.projectionMatrix.makePerspective(l, r, t, b, n, 2000);
             camera.position.set(smoothPos.x, smoothPos.y, smoothPos.z);
             camera.lookAt(smoothPos.x, smoothPos.y, 0);
 
             cube.rotation.y += 0.01;
             renderer.render(scene, camera);
-            requestAnimationFrame(animate);
+            requestAnimationFrame(loop);
         }
 
-        initAI();
-        animate();
+        setup();
         window.addEventListener('resize', () => renderer.setSize(window.innerWidth, window.innerHeight));
     </script>
 </body>
