@@ -1,48 +1,45 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>3D Window - Head Tracking</title>
+    <title>3D Pro-Window & Calibration</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
         canvas { display: block; }
         
-        #ui-overlay {
-            position: absolute; top: 20px; left: 20px; color: white;
-            background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px;
-            pointer-events: none; border: 1px solid #444;
+        /* UI Panels */
+        .panel { position: absolute; color: white; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 8px; pointer-events: auto; border: 1px solid #444; }
+        #controls { top: 20px; left: 20px; width: 220px; }
+        #calibration-overlay { 
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; 
+            background: rgba(0,255,200,0.1); display: none; z-index: 100;
+            justify-content: center; align-items: center; cursor: crosshair;
         }
+        
+        /* Calibration Dots */
+        .corner { position: absolute; width: 40px; height: 40px; border: 3px solid #00ffcc; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; background: black; }
+        #tl { top: 10px; left: 10px; }
+        #tr { top: 10px; right: 10px; }
+        #bl { bottom: 10px; left: 10px; }
+        #br { bottom: 10px; right: 10px; }
 
-        #loading-container {
-            position: absolute; top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center; color: white;
-        }
-        #progress-bar-bg {
-            width: 250px; height: 6px; background: #222;
-            border-radius: 3px; margin-top: 15px; overflow: hidden;
-        }
-        #progress-bar-fill {
-            width: 0%; height: 100%; background: #00ffcc;
-            transition: width 0.3s; box-shadow: 0 0 10px #00ffcc;
-        }
-
-        #video-preview {
-            position: absolute; bottom: 20px; right: 20px;
-            width: 160px; border-radius: 8px; border: 2px solid #00ffcc;
-            transform: scaleX(-1); /* Mirror view */
-        }
+        button { background: #00ffcc; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 10px; }
+        #video-preview { position: absolute; bottom: 20px; right: 20px; width: 120px; border-radius: 8px; transform: scaleX(-1); border: 1px solid #00ffcc; }
     </style>
 </head>
 <body>
 
-    <div id="ui-overlay">
-        <div style="font-weight: bold; margin-bottom: 5px;">3D Holographic Window</div>
-        <div style="font-size: 12px; opacity: 0.8;">Move your head to look around the object.</div>
+    <div id="calibration-overlay">
+        <div style="color: #00ffcc; font-size: 24px; text-align: center;">CALIBRATION MODE<br><span style="font-size: 14px; color: white;">Measure your screen width in CM and enter it below</span></div>
+        <div id="tl" class="corner">TL</div><div id="tr" class="corner">TR</div>
+        <div id="bl" class="corner">BL</div><div id="br" class="corner">BR</div>
     </div>
 
-    <div id="loading-container">
-        <div id="status-text">Initializing AI...</div>
-        <div id="progress-bar-bg"><div id="progress-bar-fill"></div></div>
+    <div id="controls" class="panel">
+        <div style="font-weight: bold; color: #00ffcc;">Display Settings</div>
+        <label style="font-size: 12px;">Screen Width (cm):</label>
+        <input type="number" id="screenWidthInput" value="35" style="width: 60px; background: #222; color: white; border: 1px solid #444;">
+        <button onclick="toggleCalibration()">Start Calibration</button>
+        <div id="status" style="font-size: 11px; margin-top: 10px; color: #aaa;">Status: AI Initializing...</div>
     </div>
 
     <video id="webcam" style="display:none;" autoplay playsinline></video>
@@ -62,130 +59,119 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
-        // --- CALIBRATION ---
-        const SCREEN_WIDTH_CM = 35; // Change this to your laptop's screen width
-        const SCREEN_HEIGHT_CM = 20;
-        const LERP_FACTOR = 0.15; // Lower = smoother but laggier. Higher = snappier but jittery.
+        // State Variables
+        let screenW = 35; 
+        let rawPos = { x: 0, y: 0, z: 60 };
+        let smoothPos = { x: 0, y: 0, z: 60 };
+        const lerp = 0.12;
 
-        let rawHeadPos = { x: 0, y: 0, z: 50 };
-        let smoothedHeadPos = { x: 0, y: 0, z: 50 };
-
-        // --- THREE.JS SCENE SETUP ---
+        // --- THREE.JS SCENE ---
         const scene = new THREE.Scene();
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
         document.body.appendChild(renderer.domElement);
 
-        const camera = new THREE.PerspectiveCamera(); 
-        
-        // Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
-        scene.add(ambientLight);
-        const spotLight = new THREE.PointLight(0xffffff, 500);
-        spotLight.position.set(0, 20, 10);
-        scene.add(spotLight);
+        const camera = new THREE.PerspectiveCamera();
 
-        // Virtual Box (The "Room")
-        const boxSize = 50;
-        const grid = new THREE.GridHelper(boxSize, 20, 0x00ffcc, 0x222222);
-        grid.rotation.x = Math.PI / 2;
-        grid.position.z = -boxSize / 2;
-        scene.add(grid);
+        // 3D Background: The "Deep" Room
+        const roomGroup = new THREE.Group();
+        const roomGeom = new THREE.BoxGeometry(100, 100, 200);
+        const roomMat = new THREE.MeshStandardMaterial({ 
+            color: 0x111111, side: THREE.BackSide, 
+            roughness: 0.8, metalness: 0.2 
+        });
+        const room = new THREE.Mesh(roomGeom, roomMat);
+        room.position.z = -100; // Room goes deep into screen
+        roomGroup.add(room);
 
-        // Load your model.glb
+        // Add Room Accents (The Grids)
+        const gridHelper = new THREE.GridHelper(200, 20, 0x00ffcc, 0x222222);
+        gridHelper.rotation.x = Math.PI / 2;
+        gridHelper.position.z = -100;
+        roomGroup.add(gridHelper);
+        scene.add(roomGroup);
+
+        // Lights
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        const pointLight = new THREE.PointLight(0x00ffcc, 1000);
+        pointLight.position.set(0, 20, -10);
+        scene.add(pointLight);
+
+        // Load model.glb
         let model;
         const loader = new GLTFLoader();
-        const progressBar = document.getElementById('progress-bar-fill');
-        const statusText = document.getElementById('status-text');
+        loader.load('model.glb', (gltf) => {
+            model = gltf.scene;
+            model.position.z = -20;
+            scene.add(model);
+            document.getElementById('status').innerText = "Status: Running";
+        });
 
-        loader.load('model.glb', 
-            (gltf) => {
-                model = gltf.scene;
-                // Center and Scale
-                const box = new THREE.Box3().setFromObject(model);
-                const size = box.getSize(new THREE.Vector3());
-                const scale = 15 / Math.max(size.x, size.y, size.z);
-                model.scale.set(scale, scale, scale);
-                
-                model.position.z = -15;
-                scene.add(model);
-                document.getElementById('loading-container').style.display = 'none';
-            },
-            (xhr) => {
-                if (xhr.lengthComputable) {
-                    const percent = (xhr.loaded / xhr.total) * 100;
-                    progressBar.style.width = percent + '%';
-                    statusText.innerText = "Loading Model...";
-                }
-            }
-        );
-
-        // --- MEDIAPIPE AI SETUP ---
+        // --- AI & CAMERA LOGIC ---
         const video = document.getElementById("webcam");
-        const videoPreview = document.getElementById("video-preview");
+        const videoPrev = document.getElementById("video-preview");
         let faceLandmarker;
 
-        async function initAI() {
+        async function init() {
             const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
             faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                 baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task` },
-                runningMode: "VIDEO"
+                runningMode: "VIDEO", numFaces: 1
             });
-            
             const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-            video.srcObject = stream;
-            videoPreview.srcObject = stream;
-            video.addEventListener("loadeddata", () => predict());
+            video.srcObject = videoPrev.srcObject = stream;
+            video.onloadeddata = () => detect();
         }
 
-        function predict() {
-            const results = faceLandmarker.detectForVideo(video, performance.now());
-            if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-                const face = results.faceLandmarks[0];
-                const eyePoint = face[1]; // Tip of nose / center
+        function detect() {
+            const result = faceLandmarker.detectForVideo(video, performance.now());
+            if (result.faceLandmarks?.[0]) {
+                const face = result.faceLandmarks[0];
+                const nose = face[1];
+                screenW = parseFloat(document.getElementById('screenWidthInput').value);
+                const screenH = screenW * (window.innerHeight / window.innerWidth);
+
+                rawPos.x = (nose.x - 0.5) * -screenW;
+                rawPos.y = (nose.y - 0.5) * -screenH;
                 
-                // Map to CM
-                rawHeadPos.x = (eyePoint.x - 0.5) * -SCREEN_WIDTH_CM;
-                rawHeadPos.y = (eyePoint.y - 0.5) * -SCREEN_HEIGHT_CM;
-                
-                // Estimate depth based on eye distance
-                const eyeDist = Math.sqrt(Math.pow(face[33].x - face[263].x, 2) + Math.pow(face[33].y - face[263].y, 2));
-                rawHeadPos.z = 15 / (eyeDist + 0.01);
+                // Depth logic: more eye distance = closer head
+                const eyeDist = Math.abs(face[33].x - face[263].x);
+                rawPos.z = 20 / (eyeDist + 0.05); 
             }
-            requestAnimationFrame(predict);
+            requestAnimationFrame(detect);
         }
 
-        // --- ANIMATION LOOP ---
         function animate() {
-            // Apply Smoothing (LERP)
-            smoothedHeadPos.x += (rawHeadPos.x - smoothedHeadPos.x) * LERP_FACTOR;
-            smoothedHeadPos.y += (rawHeadPos.y - smoothedHeadPos.y) * LERP_FACTOR;
-            smoothedHeadPos.z += (rawHeadPos.z - smoothedHeadPos.z) * LERP_FACTOR;
+            // Smoothing
+            smoothPos.x += (rawPos.x - smoothPos.x) * lerp;
+            smoothPos.y += (rawPos.y - smoothPos.y) * lerp;
+            smoothPos.z += (rawPos.z - smoothPos.z) * lerp;
 
-            // Off-Axis Matrix calculation
-            const n = smoothedHeadPos.z;
+            // Manual Perspective Matrix (The Window Logic)
+            const n = smoothPos.z;
             const f = 2000;
-            const l = -SCREEN_WIDTH_CM / 2 - smoothedHeadPos.x;
-            const r =  SCREEN_WIDTH_CM / 2 - smoothedHeadPos.x;
-            const b = -SCREEN_HEIGHT_CM / 2 - smoothedHeadPos.y;
-            const t =  SCREEN_HEIGHT_CM / 2 - smoothedHeadPos.y;
+            const screenH = screenW * (window.innerHeight / window.innerWidth);
+            const l = -screenW / 2 - smoothPos.x;
+            const r =  screenW / 2 - smoothPos.x;
+            const b = -screenH / 2 - smoothPos.y;
+            const t =  screenH / 2 - smoothPos.y;
 
             camera.projectionMatrix.makePerspective(l, r, t, b, n, f);
-            camera.position.set(smoothedHeadPos.x, smoothedHeadPos.y, smoothedHeadPos.z);
-            camera.lookAt(smoothedHeadPos.x, smoothedHeadPos.y, 0);
+            camera.position.set(smoothPos.x, smoothPos.y, smoothPos.z);
+            camera.lookAt(smoothPos.x, smoothPos.y, 0);
 
-            if (model) model.rotation.y += 0.005;
-
+            if (model) model.rotation.y += 0.01;
             renderer.render(scene, camera);
             requestAnimationFrame(animate);
         }
 
-        window.addEventListener('resize', () => {
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
+        window.toggleCalibration = () => {
+            const overlay = document.getElementById('calibration-overlay');
+            overlay.style.display = overlay.style.display === 'flex' ? 'none' : 'flex';
+        };
 
-        initAI();
+        window.addEventListener('resize', () => renderer.setSize(window.innerWidth, window.innerHeight));
+        init();
         animate();
     </script>
 </body>
