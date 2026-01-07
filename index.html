@@ -1,42 +1,22 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>3D Window Diagnostic - MacBook Air</title>
+    <title>M3 MacBook Air - Fixed Tracking</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; }
         canvas { display: block; }
-        
-        #ui {
-            position: absolute; top: 20px; left: 20px; color: white;
-            background: rgba(0,0,0,0.8); padding: 15px; border-radius: 10px;
-            border: 1px solid #333; z-index: 10;
-        }
-
-        #loading-screen {
-            position: absolute; inset: 0; background: #111;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            color: #00ffcc; z-index: 100;
-        }
-
-        #v-prev {
-            position: absolute; bottom: 20px; right: 20px;
-            width: 140px; border-radius: 8px; border: 1px solid #00ffcc;
-            transform: scaleX(-1);
-        }
+        #ui { position: absolute; top: 20px; left: 20px; color: #00ffcc; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 10px; border: 1px solid #333; z-index: 10; font-size: 12px; }
+        #v-prev { position: absolute; bottom: 20px; right: 20px; width: 140px; border-radius: 8px; border: 1px solid #00ffcc; transform: scaleX(-1); }
+        #debug { margin-top: 10px; font-family: monospace; color: white; font-size: 10px; }
     </style>
 </head>
 <body>
 
-    <div id="loading-screen">
-        <div id="status">Starting MediaPipe 0.10.7...</div>
-    </div>
-
     <div id="ui">
-        <div style="font-weight: bold; color: #00ffcc;">M3 MacBook Air Window</div>
-        <div id="tracking-status" style="font-size: 12px; color: #ff4444;">AI: Off</div>
-        <hr style="border:0; border-top:1px solid #333; margin: 10px 0;">
-        <label style="font-size: 10px;">SCREEN WIDTH (CM):</label><br>
-        <input type="number" id="sw" value="33.3" step="0.1" style="background:#000; color:#00ffcc; border:1px solid #444; width:60px;">
+        <b>SYSTEM STATUS</b>
+        <div id="status-ai">AI: Initializing...</div>
+        <div id="status-cam">Camera: Waiting...</div>
+        <div id="debug">X: 0 | Y: 0 | Z: 0</div>
     </div>
 
     <video id="webcam" style="display:none;" autoplay playsinline></video>
@@ -53,15 +33,14 @@
 
     <script type="module">
         import * as THREE from 'three';
-        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7";
 
-        // CONFIG
-        let SCREEN_W = 33.3; 
+        // --- CALIBRATION ---
+        const SCREEN_W_CM = 33.3; // Physical width of 15" MBA
         let rawPos = { x: 0, y: 0, z: 50 };
         let smoothPos = { x: 0, y: 0, z: 50 };
 
-        // THREE.JS SETUP
+        // --- THREE.JS SCENE ---
         const scene = new THREE.Scene();
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setPixelRatio(window.devicePixelRatio);
@@ -70,7 +49,7 @@
 
         const camera = new THREE.PerspectiveCamera();
 
-        // BACKGROUND GRID ROOM
+        // 3D Grid Room
         const room = new THREE.Mesh(
             new THREE.BoxGeometry(100, 100, 100),
             new THREE.MeshBasicMaterial({ color: 0x222222, wireframe: true, side: THREE.BackSide })
@@ -78,31 +57,18 @@
         room.position.z = -50;
         scene.add(room);
 
-        // PLACEHOLDER CUBE (Diagnostic)
-        const cube = new THREE.Mesh(
-            new THREE.BoxGeometry(15, 15, 15),
-            new THREE.MeshNormalMaterial()
-        );
-        cube.position.z = -20;
+        const cube = new THREE.Mesh(new THREE.BoxGeometry(15, 15, 15), new THREE.MeshNormalMaterial());
+        cube.position.z = -25;
         scene.add(cube);
 
-        // Load your GLB (Optional - It will try to load model.glb if it exists)
-        const loader = new GLTFLoader();
-        loader.load('model.glb', (gltf) => {
-            scene.remove(cube); // Remove cube if model loads
-            scene.add(gltf.scene);
-            gltf.scene.position.z = -20;
-            gltf.scene.scale.set(10, 10, 10);
-        }, undefined, (e) => console.log("model.glb not found, using cube."));
-
-        // MEDIAPIPE AI
+        // --- MEDIAPIPE AI ---
         const video = document.getElementById("webcam");
         const videoPrev = document.getElementById("v-prev");
+        const debug = document.getElementById("debug");
         let faceLandmarker;
 
         async function initAI() {
             try {
-                // Fixed Versioning
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7/wasm");
                 faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                     baseOptions: { 
@@ -111,52 +77,60 @@
                     },
                     runningMode: "VIDEO"
                 });
+                document.getElementById("status-ai").innerText = "AI: ONLINE";
 
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
                 video.srcObject = videoPrev.srcObject = stream;
-                
                 video.onloadeddata = () => {
-                    document.getElementById('loading-screen').style.display = 'none';
-                    document.getElementById('tracking-status').innerText = "AI: ONLINE";
-                    document.getElementById('tracking-status').style.color = "#00ffcc";
+                    document.getElementById("status-cam").innerText = "Camera: STREAMING";
                     predict();
                 };
             } catch (err) {
-                document.getElementById('status').innerHTML = "Error: " + err.message + "<br>Check Browser Camera Permissions.";
+                console.error(err);
+                document.getElementById("status-ai").innerText = "ERROR: " + err.message;
             }
         }
 
         function predict() {
+            if (!faceLandmarker) return;
+            
             const results = faceLandmarker.detectForVideo(video, performance.now());
-            if (results.faceLandmarks?.[0]) {
-                const nose = results.faceLandmarks[0][1];
-                SCREEN_W = parseFloat(document.getElementById('sw').value);
-                const screenH = SCREEN_W * (window.innerHeight / window.innerWidth);
+            
+            if (results.faceLandmarks && results.faceLandmarks[0]) {
+                const nose = results.faceLandmarks[0][1]; // Nose tip
+                const screenH_CM = SCREEN_W_CM * (window.innerHeight / window.innerWidth);
 
-                rawPos.x = (nose.x - 0.5) * -SCREEN_W;
-                rawPos.y = (nose.y - 0.5) * -screenH;
+                // Update Raw Positions
+                rawPos.x = (nose.x - 0.5) * -SCREEN_W_CM;
+                rawPos.y = (nose.y - 0.5) * -screenH_CM;
                 
-                const eyeDist = Math.abs(results.faceLandmarks[0][33].x - results.faceLandmarks[0][263].x);
-                rawPos.z = 18 / (eyeDist + 0.01); 
+                // Eye distance for Z
+                const eyeL = results.faceLandmarks[0][33];
+                const eyeR = results.faceLandmarks[0][263];
+                const dist = Math.sqrt(Math.pow(eyeL.x - eyeR.x, 2) + Math.pow(eyeL.y - eyeR.y, 2));
+                rawPos.z = 18 / (dist + 0.01);
+
+                debug.innerText = `X: ${rawPos.x.toFixed(1)} | Y: ${rawPos.y.toFixed(1)} | Z: ${rawPos.z.toFixed(1)}`;
             }
             requestAnimationFrame(predict);
         }
 
         function animate() {
-            // Smoothing
+            // 1. Smooth the data
             smoothPos.x += (rawPos.x - smoothPos.x) * 0.15;
             smoothPos.y += (rawPos.y - smoothPos.y) * 0.15;
             smoothPos.z += (rawPos.z - smoothPos.z) * 0.15;
 
-            // Off-axis Projection
-            const screenH = SCREEN_W * (window.innerHeight / window.innerWidth);
+            // 2. Calculate Off-Axis Projection
+            const screenH_CM = SCREEN_W_CM * (window.innerHeight / window.innerWidth);
             const n = Math.max(smoothPos.z, 0.1); 
-            const f = 1000;
-            const l = -SCREEN_W / 2 - smoothPos.x;
-            const r =  SCREEN_W / 2 - smoothPos.x;
-            const b = -screenH / 2 - smoothPos.y;
-            const t =  screenH / 2 - smoothPos.y;
+            const f = 2000;
+            const l = -SCREEN_W_CM / 2 - smoothPos.x;
+            const r =  SCREEN_W_CM / 2 - smoothPos.x;
+            const b = -screenH_CM / 2 - smoothPos.y;
+            const t =  screenH_CM / 2 - smoothPos.y;
 
+            // 3. Apply Matrix to Camera
             camera.projectionMatrix.makePerspective(l, r, t, b, n, f);
             camera.position.set(smoothPos.x, smoothPos.y, smoothPos.z);
             camera.lookAt(smoothPos.x, smoothPos.y, 0);
