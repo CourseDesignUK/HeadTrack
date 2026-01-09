@@ -2,108 +2,110 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Model Viewer – Grab, Scale & Rotate</title>
+<title>Pro Model Viewer – Multi-Axis Control</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
-body {
-  margin: 0;
-  overflow: hidden;
-  background: #000;
-  font-family: -apple-system, system-ui;
-  color: #00ffcc;
-}
-canvas { display:block; }
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: #000;
+    font-family: -apple-system, system-ui, sans-serif;
+    color: #00ffcc;
+  }
+  canvas { display:block; }
 
-/* Instruction box (top right) */
-#instructions {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  background: rgba(0,0,0,0.85);
-  padding: 14px 16px;
-  border-radius: 12px;
-  border: 1px solid #333;
-  font-size: 12px;
-  line-height: 1.5;
-  z-index: 10;
-}
+  #instructions {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: rgba(0,0,0,0.85);
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 1px solid #333;
+    font-size: 12px;
+    line-height: 1.6;
+    z-index: 10;
+  }
 
-/* Status box */
-#ui {
-  position: fixed;
-  top: 20px;
-  left: 20px;
-  background: rgba(0,0,0,0.85);
-  padding: 14px;
-  border-radius: 12px;
-  border: 1px solid #333;
-  font-size: 12px;
-  z-index: 10;
-}
+  #ui {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    background: rgba(0,0,0,0.85);
+    padding: 14px;
+    border-radius: 12px;
+    border: 1px solid #333;
+    font-size: 12px;
+    z-index: 10;
+    min-width: 120px;
+  }
 
-/* Loading */
-#loading {
-  position: fixed;
-  inset: 0;
-  background: black;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-.spinner {
-  width: 40px;
-  height: 40px;
-  border: 4px solid #333;
-  border-top: 4px solid #00ffcc;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
+  #loading {
+    position: fixed;
+    inset: 0;
+    background: black;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #333;
+    border-top: 4px solid #00ffcc;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 10px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Webcam preview */
-#v-prev {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  width: 140px;
-  opacity: 0.4;
-  border: 1px solid #00ffcc;
-  border-radius: 8px;
-  transform: scaleX(-1);
-}
+  #v-prev {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 160px;
+    opacity: 0.5;
+    border: 2px solid #00ffcc;
+    border-radius: 12px;
+    transform: scaleX(-1);
+    background: #111;
+  }
 
-/* Hand dots */
-.hand-dot {
-  position: fixed;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #00ffcc;
-  box-shadow: 0 0 12px #00ffcc;
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-  display: none;
-  z-index: 50;
-}
+  .hand-dot {
+    position: fixed;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #00ffcc;
+    box-shadow: 0 0 15px #00ffcc;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    display: none;
+    z-index: 50;
+  }
 </style>
 </head>
 
 <body>
 
-<div id="loading"><div class="spinner"></div></div>
+<div id="loading">
+  <div class="spinner"></div>
+  <div>Loading AI Models...</div>
+</div>
 
 <div id="ui">
-  <b>Status</b><br>
-  <span id="debug">Waiting for hands…</span>
+  <b>System Status</b><br>
+  <span id="debug">Initializing camera...</span>
 </div>
 
 <div id="instructions">
-  <b>Controls</b><br>
-  🤏 Pinch + move = grab<br>
-  🤏🤏 Two-hand pinch = rotate<br>
-  ✋ Spread hands = scale
+  <b>3D Gesture Controls</b><br>
+  🤏 <b>1 Hand Pinch:</b> Drag to Move<br>
+  🤏🤏 <b>2 Hand Pinch:</b> Multi-Axis Rotate<br>
+  ↔️ <b>Spread Hands:</b> Scale Zoom
 </div>
 
 <video id="webcam" autoplay playsinline style="display:none"></video>
@@ -124,49 +126,63 @@ canvas { display:block; }
 <script type="module">
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { HandLandmarker, FilesetResolver }
+import { HandLandmarker, FilesetResolver } 
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7";
 
 /* ───────── THREE SETUP ───────── */
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x000000);
-
-const renderer = new THREE.WebGLRenderer({ antialias:true });
-renderer.setPixelRatio(devicePixelRatio);
-renderer.setSize(innerWidth, innerHeight);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 1000);
-camera.position.set(0, 0, 80);
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 1000);
+camera.position.set(0, 0, 100);
 
-scene.add(new THREE.DirectionalLight(0xffffff, 2).position.set(10,20,20));
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const light1 = new THREE.DirectionalLight(0xffffff, 3);
+light1.position.set(10, 20, 20);
+scene.add(light1);
+scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 
-const grid = new THREE.GridHelper(200, 20, 0x00ffcc, 0x222222);
-grid.position.y = -25;
+const grid = new THREE.GridHelper(200, 40, 0x00ffcc, 0x111111);
+grid.position.y = -30;
 scene.add(grid);
 
-/* ───────── MODEL ───────── */
+/* ───────── MODEL DATA ───────── */
 
 let model;
 let baseScale = 1;
 let targetScale = 1;
 let smoothScale = 1;
 
-new GLTFLoader().load("model.glb", gltf => {
-  model = gltf.scene;
+// Load your model - using a sample if model.glb isn't present
+new GLTFLoader().load("model.glb", 
+  (gltf) => { setupModel(gltf); },
+  undefined,
+  (err) => { 
+    console.warn("Local model.glb not found, loading fallback.");
+    new GLTFLoader().load("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/DamagedHelmet/glTF-Binary/DamagedHelmet.glb", setupModel);
+  }
+);
 
+function setupModel(gltf) {
+  model = gltf.scene;
   const box = new THREE.Box3().setFromObject(model);
   const size = box.getSize(new THREE.Vector3()).length();
-  baseScale = 30 / size;
-
+  baseScale = 40 / size;
   model.scale.setScalar(baseScale);
-  box.getCenter(model.position).multiplyScalar(-1);
+  
+  // Center model
+  const center = box.getCenter(new THREE.Vector3());
+  model.position.x = -center.x;
+  model.position.y = -center.y;
+  model.position.z = -center.z;
 
   scene.add(model);
   document.getElementById("loading").style.display = "none";
-});
+  initHands();
+}
 
 /* ───────── HAND TRACKING ───────── */
 
@@ -176,9 +192,9 @@ const dotR = document.getElementById("dotR");
 
 let handLandmarker;
 let baselineDist = null;
-let grabbing = false;
 let lastMid = null;
 let lastAngle = null;
+let lastTilt = null;
 
 async function initHands() {
   const vision = await FilesetResolver.forVisionTasks(
@@ -187,14 +203,13 @@ async function initHands() {
 
   handLandmarker = await HandLandmarker.createFromOptions(vision, {
     baseOptions: {
-      modelAssetPath:
-        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
     },
     runningMode: "VIDEO",
     numHands: 2
   });
 
-  const stream = await navigator.mediaDevices.getUserMedia({ video:true });
+  const stream = await navigator.mediaDevices.getUserMedia({ video: true });
   video.srcObject = document.getElementById("v-prev").srcObject = stream;
 
   video.onloadeddata = () => {
@@ -204,23 +219,25 @@ async function initHands() {
 }
 
 function pinch(hand) {
-  const i = hand[8], t = hand[4];
-  return Math.hypot(i.x - t.x, i.y - t.y) < 0.04;
+  const index = hand[8], thumb = hand[4];
+  return Math.hypot(index.x - thumb.x, index.y - thumb.y) < 0.045;
 }
 
 function updateDot(dot, lm) {
-  dot.style.left = `${lm.x * innerWidth}px`;
-  dot.style.top  = `${lm.y * innerHeight}px`;
+  dot.style.left = `${(1 - lm.x) * window.innerWidth}px`; // Mirrored
+  dot.style.top  = `${lm.y * window.innerHeight}px`;
   dot.style.display = "block";
 }
 
 function trackHands() {
+  if (!handLandmarker) return;
   const res = handLandmarker.detectForVideo(video, performance.now());
 
-  if (res.landmarks?.length) {
+  if (res.landmarks && res.landmarks.length > 0) {
     const hands = res.landmarks;
     const pinches = hands.map(pinch);
 
+    // TWO HAND CONTROL: SCALE & MULTI-AXIS ROTATE
     if (hands.length === 2) {
       const a = hands[0][8];
       const b = hands[1][8];
@@ -228,38 +245,61 @@ function trackHands() {
       updateDot(dotL, a);
       updateDot(dotR, b);
 
+      // 1. Scale
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       if (!baselineDist) baselineDist = d;
-      targetScale = baseScale * THREE.MathUtils.clamp(d / baselineDist, 0.4, 3);
+      targetScale = baseScale * THREE.MathUtils.clamp(d / baselineDist, 0.2, 4);
 
+      // 2. Multi-Axis Rotation
       if (pinches[0] && pinches[1]) {
-        const mid = { x:(a.x+b.x)/2, y:(a.y+b.y)/2 };
-        const angle = Math.atan2(b.y-a.y, b.x-a.x);
+        const currentAngle = Math.atan2(b.y - a.y, b.x - a.x);
+        const currentTilt = (b.y - a.y);
 
-        if (lastAngle !== null) {
-          model.rotation.y += angle - lastAngle;
+        if (lastAngle !== null && lastTilt !== null) {
+          // EXAGGERATION MULTIPLIERS
+          const multY = 4.0; 
+          const multX = 6.0;
+
+          // Y-Axis (Yaw) with wrapping fix
+          let deltaAngle = currentAngle - lastAngle;
+          if (deltaAngle > Math.PI) deltaAngle -= Math.PI * 2;
+          if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2;
+          model.rotation.y += deltaAngle * multY;
+
+          // X-Axis (Pitch)
+          let deltaTilt = currentTilt - lastTilt;
+          model.rotation.x += deltaTilt * multX;
         }
-        lastAngle = angle;
-        document.getElementById("debug").innerText = "Rotating";
+        lastAngle = currentAngle;
+        lastTilt = currentTilt;
+        document.getElementById("debug").innerText = "3D Rotating";
       } else {
-        lastAngle = null;
+        lastAngle = lastTilt = null;
+        document.getElementById("debug").innerText = "Hands Detected";
       }
-    } else if (hands.length === 1 && pinches[0]) {
+
+    } 
+    // SINGLE HAND CONTROL: TRANSLATE (MOVE)
+    else if (hands.length === 1 && pinches[0]) {
       const p = hands[0][8];
       updateDot(dotL, p);
       dotR.style.display = "none";
 
-      if (!lastMid) lastMid = p;
-      model.position.x += (p.x - lastMid.x) * 50;
-      model.position.y -= (p.y - lastMid.y) * 50;
+      if (lastMid) {
+        model.position.x += (p.x - lastMid.x) * -100; // Mirrored movement
+        model.position.y += (p.y - lastMid.y) * -100;
+      }
       lastMid = p;
-
       document.getElementById("debug").innerText = "Grabbing";
-    } else {
+    } 
+    else {
       dotL.style.display = dotR.style.display = "none";
-      baselineDist = lastMid = lastAngle = null;
-      document.getElementById("debug").innerText = "Show hands";
+      baselineDist = lastMid = lastAngle = lastTilt = null;
+      document.getElementById("debug").innerText = "Hands visible (No pinch)";
     }
+  } else {
+    dotL.style.display = dotR.style.display = "none";
+    document.getElementById("debug").innerText = "Waiting for hands...";
   }
 
   requestAnimationFrame(trackHands);
@@ -268,18 +308,19 @@ function trackHands() {
 /* ───────── RENDER LOOP ───────── */
 
 function animate() {
-  smoothScale += (targetScale - smoothScale) * 0.15;
-  if (model) model.scale.setScalar(smoothScale);
+  if (model) {
+    // Smooth scaling
+    smoothScale += (targetScale - smoothScale) * 0.1;
+    model.scale.setScalar(smoothScale);
+  }
 
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
 
-initHands();
-
-addEventListener("resize", ()=>{
-  renderer.setSize(innerWidth, innerHeight);
-  camera.aspect = innerWidth / innerHeight;
+addEventListener("resize", () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
 });
 </script>
